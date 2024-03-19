@@ -13,12 +13,19 @@ def train(args, model, train_loader, optimizer, criterion, epoch):
     for batch_idx, sample in enumerate(train_loader):
         audio, video, video_st, target = sample['audio'].to('cuda'), sample['video_s'].to('cuda'), sample['video_st'].to('cuda'), sample['label'].type(torch.FloatTensor).to('cuda')
 
+        # print('audio', audio)
+        # print('video', video)
+        # print('video_st', video_st)
+        # print('target', target)
+        # exit()
+        
         optimizer.zero_grad()
         output, a_prob, v_prob, _ = model(audio, video, video_st)
         output.clamp_(min=1e-7, max=1 - 1e-7)
         a_prob.clamp_(min=1e-7, max=1 - 1e-7)
         v_prob.clamp_(min=1e-7, max=1 - 1e-7)
 
+        # Jia: why we need to do label smoothing here?
         # label smoothing
         a = 1.0
         v = 0.9 
@@ -77,7 +84,7 @@ def eval(model, val_loader, set):
             GT_a = np.zeros((25, 10))
             GT_v =np.zeros((25, 10))
 
-            df_vid_a = df_a.loc[df_a['filename'] == df.loc[batch_idx, :][0]]
+            df_vid_a = df_a.loc[df_a['filename'] == df.iloc[batch_idx, :][0]]
             filenames = df_vid_a["filename"]
             events = df_vid_a["event_labels"]
             onsets = df_vid_a["onset"]
@@ -93,7 +100,7 @@ def eval(model, val_loader, set):
                     GT_a[idx, x1:x2] = 1
 
             # extract visual GT labels
-            df_vid_v = df_v.loc[df_v['filename'] == df.loc[batch_idx, :][0]]
+            df_vid_v = df_v.loc[df_v['filename'] == df.iloc[batch_idx, :][0]]
             filenames = df_vid_v["filename"]
             events = df_vid_v["event_labels"]
             onsets = df_vid_v["onset"]
@@ -196,6 +203,8 @@ def main():
 
     if args.model == 'MMIL_Net':
         model = MMIL_Net().to('cuda')
+        # model = MMIL_Net().to('cpu')
+
     else:
         raise ('not recognized')
 

@@ -44,11 +44,11 @@ class LLP_dataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.loc[idx, :]
-        name = row[0][:11]
+        name = row.iloc[0][:11]
         audio = np.load(os.path.join(self.audio_dir, name + '.npy'))
         video_s = np.load(os.path.join(self.video_dir, name + '.npy'))
         video_st = np.load(os.path.join(self.st_dir, name + '.npy'))
-        ids = row[-1].split(',')
+        ids = row.iloc[-1].split(',')
         label = ids_to_multinomial(ids)
         sample = {'audio': audio, 'video_s': video_s, 'video_st': video_st, 'label': label}
 

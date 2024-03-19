@@ -6,6 +6,9 @@ import numpy
 import copy
 import math
 
+from nets.ViS4mer_mamba import S4
+
+
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
@@ -101,6 +104,9 @@ class MMIL_Net(nn.Module):
         self.cmt_encoder = Encoder(CMTLayer(d_model=512, nhead=1, dim_feedforward=512), num_layers=1)
         self.hat_encoder = Encoder(HANLayer(d_model=512, nhead=1, dim_feedforward=512), num_layers=1)
 
+        # Jia: add mamba model
+        self.mamba_encoder = Encoder(ViS4mer(d_input=512, l_max=512, d_output=512, d_model=512, n_layers=1, dropout=0.1, prenorm=True,), num_layers=1)
+
     def forward(self, audio, visual, visual_st):
 
         x1 = self.fc_a(audio)
@@ -112,8 +118,11 @@ class MMIL_Net(nn.Module):
         x2 = torch.cat((vid_s, vid_st), dim =-1)
         x2 = self.fc_fusion(x2)
 
-        # HAN
-        x1, x2 = self.hat_encoder(x1, x2)
+        # Jia : change encoder to Mamba / Mar-12, 2024
+        x1, x2 = self.mamba_encoder(x1, x2)
+        # Jia: rejust the shape of x1 and x2
+        x1 = x1.unsqueeze(1).repeat(1, 10, 1)
+        x2 = x2.unsqueeze(1).repeat(1, 10, 1)
 
         # prediction
         x = torch.cat([x1.unsqueeze(-2), x2.unsqueeze(-2)], dim=-2)
@@ -167,3 +176,98 @@ class CMTLayer(nn.Module):
         src_q = src_q + self.dropout2(src2)
         src_q = self.norm2(src_q)
         return src_q
+
+class ViS4mer(nn.Module):
+
+    def __init__(
+            self,
+            d_input,
+            l_max,
+            d_output,
+            d_model,
+            n_layers,
+            dropout=0.2,
+            prenorm=True,
+    ):
+        super().__init__()
+
+        self.prenorm = prenorm
+        self.d_model = d_model
+        self.d_input = d_input
+
+        # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
+        self.encoder = nn.Linear(d_input, d_model)
+
+        # Stack S4 layers as residual blocks
+        self.s4_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        self.pools = nn.ModuleList()
+        self.linears = nn.ModuleList()
+        self.gelus = nn.ModuleList()
+        for _ in range(n_layers):
+            self.s4_layers.append(
+                S4(H=d_model, l_max=l_max, dropout=dropout, transposed=True)
+            )
+            self.norms.append(nn.LayerNorm(d_model))
+            self.dropouts.append(nn.Dropout2d(dropout))
+            self.pools.append(nn.AvgPool1d(2))
+            self.linears.append(nn.Linear(d_model, int(d_model/2)))
+            self.gelus.append(nn.GELU())
+            d_model = int(d_model/2)
+            l_max = int(l_max/2)
+
+        # Linear decoder
+        self.decoder = nn.Linear(d_model, d_output)
+
+    def forward(self, x1, x2, src_mask=None, src_key_padding_mask=None):
+        """
+        Input x is shape (B, L, d_input)
+        """
+        x1 = x1.to(torch.float32)
+
+        if self.d_model != self.d_input:
+            x1 = self.encoder(x1)  # (B, L, d_input) -> (B, L, d_model)
+
+        x1 = x1.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
+
+        for layer, norm, dropout, pool,linear, gelu in \
+                zip(self.s4_layers, self.norms, self.dropouts, self.pools, self.linears, self.gelus):
+            # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
+            z1 = x1
+
+            if self.prenorm:
+                # Prenorm
+                z1 = norm(z1.transpose(-1, -2)).transpose(-1, -2)
+
+            # Apply S4 block: we ignore the state input and output
+            # print('z1.shape', z1.shape)
+            z1, _ = layer(z1)
+
+            # Dropout on the output of the S4 block
+            z1 = dropout(z1)
+
+            # Residual connection
+            x1 = z1 + x1
+
+            if not self.prenorm:
+                # Postnorm
+                x1 = norm(x1.transpose(-1, -2)).transpose(-1, -2)
+            #pooling layer
+            x1 = pool(x1)
+            # MLP
+            x1 = x1.transpose(-1, -2)
+            x1 = linear(x1)
+            x1 = gelu(x1)
+            x1 = x1.transpose(-1, -2)
+        x1 = x1.transpose(-1, -2)
+
+        # Pooling: average pooling over the sequence length
+        x1 = x1.mean(dim=1)
+
+        #x = x.max(dim=1)
+        # Decode the outputs
+        x1 = self.decoder(x1)  # (B, d_model) -> (B, d_output)
+
+        return x1
+    
