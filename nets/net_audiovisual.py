@@ -6,7 +6,8 @@ import numpy
 import copy
 import math
 
-from nets.ViS4mer_mamba import S4
+# from nets.ViS4mer_mamba import S4
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
 
 
 def _get_clones(module, N):
@@ -105,7 +106,16 @@ class MMIL_Net(nn.Module):
         self.hat_encoder = Encoder(HANLayer(d_model=512, nhead=1, dim_feedforward=512), num_layers=1)
 
         # Jia: add mamba model
-        self.mamba_encoder = Encoder(ViS4mer(d_input=512, l_max=512, d_output=512, d_model=512, n_layers=1, dropout=0.1, prenorm=True,), num_layers=1)
+        # self.Vmamba_encoder = Encoder(ViS4mer(d_input=512, l_max=512, d_output=512, d_model=512, n_layers=1, dropout=0.1, prenorm=True,), num_layers=1)
+        
+        self.mamba_encoder = Encoder(Mamba(d_model=512, d_state=16, d_conv=4, expand=2, layer_idx = 0), num_layers=1)
+        # This module uses roughly 3 * expand * d_model^2 parameters
+         # Model dimension d_model
+          # SSM state expansion factor
+            # Local convolution width
+            # Block expansion factor
+        
+
 
     def forward(self, audio, visual, visual_st):
 
@@ -120,9 +130,12 @@ class MMIL_Net(nn.Module):
 
         # Jia : change encoder to Mamba / Mar-12, 2024
         x1, x2 = self.mamba_encoder(x1, x2)
+        # print(x1.shape)
+        # print(x2.shape)
+
         # Jia: rejust the shape of x1 and x2
-        x1 = x1.unsqueeze(1).repeat(1, 10, 1)
-        x2 = x2.unsqueeze(1).repeat(1, 10, 1)
+        # x1 = x1.unsqueeze(1).repeat(1, 10, 1)
+        # x2 = x2.unsqueeze(1).repeat(1, 10, 1)
 
         # prediction
         x = torch.cat([x1.unsqueeze(-2), x2.unsqueeze(-2)], dim=-2)
@@ -176,6 +189,28 @@ class CMTLayer(nn.Module):
         src_q = src_q + self.dropout2(src2)
         src_q = self.norm2(src_q)
         return src_q
+
+
+# self.mamba_encoder = Encoder(Mamba(d_input=512, l_max=512, d_output=512, d_model=512, n_layers=1, dropout=0.1, prenorm=True,), num_layers=1)
+
+
+
+# batch, length, dim = 2, 64, 16
+# x = torch.randn(batch, length, dim).to("cuda")
+# model = Mamba(
+#     # This module uses roughly 3 * expand * d_model^2 parameters
+#     d_model=dim, # Model dimension d_model
+#     d_state=16,  # SSM state expansion factor
+#     d_conv=4,    # Local convolution width
+#     expand=2,    # Block expansion factor
+# ).to("cuda")
+# y = model(x)
+
+# assert y.shape == x.shape
+
+
+
+
 
 class ViS4mer(nn.Module):
 
